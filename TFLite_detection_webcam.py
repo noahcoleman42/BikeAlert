@@ -1,15 +1,17 @@
 ######## Webcam Object Detection Using Tensorflow-trained Classifier #########
 #
-# Author: Evan Juras
+# Original Author: Evan Juras
 # Date: 10/27/19
+# Forked and changed by: Noah Coleman
+# 6/21/20
 # Description: 
 # This program uses a TensorFlow Lite model to perform object detection on a live webcam
 # feed. It draws boxes and scores around the objects of interest in each frame from the
 # webcam. To improve FPS, the webcam object runs in a separate thread from the main program.
 # This script will work with either a Picamera or regular USB webcam.
 #
-# This code is based off the TensorFlow Lite image classification example at:
-# https://github.com/tensorflow/tensorflow/blob/master/tensorflow/lite/examples/python/label_image.py
+# This code is based on Evan Juras' TensorFlow Lite object detection example at:
+# https://github.com/EdjeElectronics/TensorFlow-Lite-Object-Detection-on-Android-and-Raspberry-Pi
 #
 # I added my own method of drawing boxes and labels using OpenCV.
 
@@ -20,8 +22,11 @@ import cv2
 import numpy as np
 import sys
 import time
+import signal
 from threading import Thread
 import importlib.util
+import RPi.GPIO as GPIO
+import multiprocessing
 
 # Define VideoStream class to handle streaming of video from webcam in separate processing thread
 # Source - Adrian Rosebrock, PyImageSearch: https://www.pyimagesearch.com/2015/12/28/increasing-raspberry-pi-fps-with-python-and-opencv/
@@ -29,7 +34,7 @@ class VideoStream:
     """Camera object that controls video streaming from the Picamera"""
     def __init__(self,resolution=(640,480),framerate=30):
         # Initialize the PiCamera and the camera image stream
-        self.stream = cv2.VideoCapture(0)
+        self.stream = cv2.VideoCapture(-1)
         ret = self.stream.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         ret = self.stream.set(3,resolution[0])
         ret = self.stream.set(4,resolution[1])
@@ -37,11 +42,11 @@ class VideoStream:
         # Read first frame from the stream
         (self.grabbed, self.frame) = self.stream.read()
 
-	# Variable to control when the camera is stopped
+    # Variable to control when the camera is stopped
         self.stopped = False
 
     def start(self):
-	# Start the thread that reads frames from the video stream
+    # Start the thread that reads frames from the video stream
         Thread(target=self.update,args=()).start()
         return self
 
@@ -58,11 +63,11 @@ class VideoStream:
             (self.grabbed, self.frame) = self.stream.read()
 
     def read(self):
-	# Return the most recent frame
+    # Return the most recent frame
         return self.frame
 
     def stop(self):
-	# Indicate that the camera and thread should be stopped
+    # Indicate that the camera and thread should be stopped
         self.stopped = True
 
 # Define and parse input arguments
@@ -158,6 +163,28 @@ freq = cv2.getTickFrequency()
 videostream = VideoStream(resolution=(imW,imH),framerate=30).start()
 time.sleep(1)
 
+# Initialize buzzer
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+GPIO.setup(23,GPIO.OUT)
+
+def buzzer():
+    for i in range(3):
+        GPIO.output(23,GPIO.HIGH)
+        time.sleep(.5)
+        GPIO.output(23,GPIO.LOW)
+        time.sleep(.3)
+    time.sleep(1)
+    
+# Initialize ultrasonic distance sensor
+# Connect Vcc to +5V
+triggerPin = 18
+echoPin = 24    
+GPIO.setup(triggerPin, GPIO.OUT)
+GPIO.setup(echoPin, GPIO.IN)
+
+
+
 #for frame1 in camera.capture_continuous(rawCapture, format="bgr",use_video_port=True):
 while True:
 
@@ -207,6 +234,34 @@ while True:
             label_ymin = max(ymin, labelSize[1] + 10) # Make sure not to draw label too close to top of window
             cv2.rectangle(frame, (xmin, label_ymin-labelSize[1]-10), (xmin+labelSize[0], label_ymin+baseLine-10), (255, 255, 255), cv2.FILLED) # Draw white box to put label text in
             cv2.putText(frame, label, (xmin, label_ymin-7), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2) # Draw label text
+            
+            
+            # Sound buzzer when camera sees a person within range
+            if (object_name == 'person'):
+                # set trigger pin to HIGH for 10us
+                GPIO.output(triggerPin, True)
+                time.sleep(0.00001)
+                GPIO.output(triggerPin, False)
+                
+                startTime = time.time()
+                stopTime = time.time()
+                
+                # save start time
+                while GPIO.input(echoPin) == 0:
+                    startTime = time.time()
+                
+                # save time of arrival
+                while GPIO.input(echoPin) == 1:
+                    stopTime = time.time()
+                    
+                timeElapsed = stopTime - startTime
+                # Distance = speed of sound (34300 cm/s) times time elapsed divided by 2 bc there and back
+                distance = (timeElapsed*34300)/2
+                
+                # Sound buzzer if sensor detects movement within 4 meters (400 cm).
+                if (distance < 400):
+                    buzzer()
+
 
     # Draw framerate in corner of frame
     cv2.putText(frame,'FPS: {0:.2f}'.format(frame_rate_calc),(30,50),cv2.FONT_HERSHEY_SIMPLEX,1,(255,255,0),2,cv2.LINE_AA)
